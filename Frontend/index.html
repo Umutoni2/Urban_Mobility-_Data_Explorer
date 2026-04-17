@@ -539,3 +539,104 @@ function renderLandingInsights(s){
     bars.innerHTML=vals.map((v,i)=>`<div class="mini-bar${v===mx?' hi':''}" style="height:${Math.round(v/mx*100)}%" title="Hour ${i}:00 — relative volume"></div>`).join('');
   }
 }
+
+// ── OVERVIEW ──
+async function loadOverview(){
+  await initLanding();
+  const d=await apiFetch('/overview');
+  if(!d)return;
+  const k=d.kpis;
+  document.getElementById('kpi-trips').textContent=fmt.num(k.total_trips);
+  document.getElementById('kpi-dur').textContent=(+k.avg_duration/60).toFixed(1);
+  document.getElementById('kpi-dist').textContent=(+k.avg_distance).toFixed(2);
+  document.getElementById('kpi-speed').textContent=(+k.avg_speed).toFixed(1);
+  document.getElementById('kpi-fare').textContent='$'+(+k.avg_fare).toFixed(2);
+  document.getElementById('kpi-totaldist').textContent=fmt.km(k.total_distance);
+  renderInsights(d);
+  renderOverviewCharts(d);
+}
+
+function renderInsights(d){
+  const k=d.kpis;
+  const peakHour=d.hourly.reduce((a,b)=>b.cnt>a.cnt?b:a,d.hourly[0]);
+  const topVendor=d.vendor.reduce((a,b)=>b.cnt>a.cnt?b:a,d.vendor[0]);
+  const pct=v=>(v.cnt/k.total_trips*100).toFixed(1);
+  document.getElementById('insight-grid').innerHTML=`
+    <div class="insight-card yellow">
+      <div class="insight-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f0b429" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg></div>
+      <div class="insight-headline">Peak Hour: ${peakHour.hour}:00</div>
+      <div class="insight-body">${fmt.num(peakHour.cnt)} trips — the busiest single hour in the dataset, representing ${pct(peakHour)}% of all activity.</div>
+    </div>
+    <div class="insight-card green">
+      <div class="insight-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><polyline points="23,6 13.5,15.5 8.5,10.5 1,18"/><polyline points="17,6 23,6 23,12"/></svg></div>
+      <div class="insight-headline">Avg Speed: ${(+k.avg_speed).toFixed(1)} km/h</div>
+      <div class="insight-body">Derived from Haversine distance ÷ trip duration. NYC traffic averages under 20 km/h during peak hours.</div>
+    </div>
+    <div class="insight-card">
+      <div class="insight-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></div>
+      <div class="insight-headline">Vendor ${topVendor.vendor_id} Dominates</div>
+      <div class="insight-body">${pct(topVendor)}% of all trips — ${fmt.num(topVendor.cnt)} rides — were handled by Vendor ${topVendor.vendor_id}.</div>
+    </div>
+    <div class="insight-card red">
+      <div class="insight-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+      <div class="insight-headline">Avg Fare: $${(+k.avg_fare).toFixed(2)}</div>
+      <div class="insight-body">Estimated from base rate + $1.56/km + $0.35/min. Short trips under 2 km still average $5+ due to base charge.</div>
+    </div>`;
+}
+
+function renderOverviewCharts(d){
+  const hours=Array.from({length:24},(_,i)=>String(i).padStart(2,'0')+':00');
+  const hourMap={};d.hourly.forEach(r=>hourMap[r.hour]=r.cnt);
+  mkChart('chart-hour',{type:'bar',data:{labels:hours,datasets:[{data:hours.map((_,i)=>hourMap[i]||0),backgroundColor:CA+'55',borderColor:CA,borderWidth:1,borderRadius:2}]},options:baseOpts()});
+
+  const days=DAY_NAMES;
+  const dayMap={};d.daily.forEach(r=>dayMap[r.day_of_week]=r.cnt);
+  mkChart('chart-day',{type:'bar',data:{labels:days,datasets:[{data:days.map((_,i)=>dayMap[i]||0),backgroundColor:CC+'44',borderColor:CC,borderWidth:1,borderRadius:2}]},options:baseOpts()});
+
+  mkChart('chart-vendor',{type:'doughnut',data:{labels:d.vendor.map(v=>'Vendor '+v.vendor_id),datasets:[{data:d.vendor.map(v=>v.cnt),backgroundColor:[CA,CC],borderColor:'#141c26',borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'bottom',labels:{color:'#8a9ab0',font:{size:10}}},tooltip:CTT}}});
+
+  const paxLabels=d.passenger.map(p=>p.passenger_count+' pax');
+  mkChart('chart-pax',{type:'bar',data:{labels:paxLabels,datasets:[{data:d.passenger.map(p=>p.cnt),backgroundColor:CG+'66',borderColor:CG,borderWidth:1,borderRadius:2}]},options:baseOpts()});
+
+  const mLabels=d.monthly.map(m=>MONTH_NAMES[(m.month-1)]);
+  mkChart('chart-monthly',{type:'line',data:{labels:mLabels,datasets:[{data:d.monthly.map(m=>m.cnt),borderColor:CA,backgroundColor:CA+'22',fill:true,tension:.4,pointRadius:3,pointBackgroundColor:CA}]},options:baseOpts()});
+
+  mkChart('chart-distance',{type:'bar',data:{
+    labels:d.distBuckets.map(b=>b.bucket),
+    datasets:[
+      {label:'Trips',data:d.distBuckets.map(b=>b.cnt),backgroundColor:CA+'55',borderColor:CA,borderWidth:1,borderRadius:2,yAxisID:'y'},
+      {label:'Avg Fare ($)',data:d.distBuckets.map(b=>(+b.avg_fare).toFixed(2)),type:'line',borderColor:CC,backgroundColor:'transparent',yAxisID:'y1',tension:.4,pointRadius:3,pointBackgroundColor:CC}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'top',labels:{color:'#8a9ab0',font:{size:9}}},tooltip:CTT},
+      scales:{x:{grid:{color:CGrid},ticks:{color:'#4a5a70'}},y:{grid:{color:CGrid},ticks:{color:'#4a5a70'}},y1:{position:'right',grid:{display:false},ticks:{color:CC}}}}});
+
+  mkChart('chart-speed',{type:'bar',data:{labels:d.speedDist.map(s=>s.bucket+' km/h'),datasets:[{data:d.speedDist.map(s=>s.cnt),backgroundColor:CR+'55',borderColor:CR,borderWidth:1,borderRadius:2}]},options:baseOpts()});
+}
+
+// ── TIME PATTERNS ──
+async function renderTimeCharts(){
+  timeChartsRendered=true;
+  const d=await apiFetch('/time');
+  if(!d)return;
+  const hours=Array.from({length:24},(_,i)=>String(i).padStart(2,'0')+':00');
+  const fareMap={},spdMap={};
+  d.fareByHour.forEach(r=>{fareMap[r.hour]=(+r.avg_fare).toFixed(2);});
+  d.speedByHour.forEach(r=>{spdMap[r.hour]=(+r.avg_speed).toFixed(1);});
+
+  mkChart('chart-fare-hour',{type:'line',data:{labels:hours,datasets:[{data:hours.map((_,i)=>fareMap[i]||0),borderColor:CA,backgroundColor:CA+'18',fill:true,tension:.4,pointRadius:2,pointBackgroundColor:CA}]},options:baseOpts({scales:{x:{grid:{color:CGrid},ticks:{color:'#4a5a70'}},y:{grid:{color:CGrid},ticks:{color:'#4a5a70',callback:v=>'$'+v}}}})});
+  mkChart('chart-speed-hour',{type:'line',data:{labels:hours,datasets:[{data:hours.map((_,i)=>spdMap[i]||0),borderColor:CC,backgroundColor:CC+'18',fill:true,tension:.4,pointRadius:2,pointBackgroundColor:CC}]},options:baseOpts({scales:{x:{grid:{color:CGrid},ticks:{color:'#4a5a70'}},y:{grid:{color:CGrid},ticks:{color:'#4a5a70',callback:v=>v+' km/h'}}}})});
+
+  const days=DAY_NAMES;
+  const dm={};d.dayMulti.forEach(r=>{dm[r.day_of_week]=r;});
+  mkChart('chart-day-multi',{type:'bar',data:{
+    labels:days,
+    datasets:[
+      {label:'Trips',data:days.map((_,i)=>dm[i]?dm[i].cnt:0),backgroundColor:CA+'55',borderColor:CA,borderWidth:1,borderRadius:2,yAxisID:'y'},
+      {label:'Avg Fare ($)',data:days.map((_,i)=>dm[i]?(+dm[i].avg_fare).toFixed(2):0),type:'line',borderColor:CC,backgroundColor:'transparent',yAxisID:'y1',tension:.4,pointRadius:4,pointBackgroundColor:CC},
+      {label:'Avg Dist (km)',data:days.map((_,i)=>dm[i]?(+dm[i].avg_dist).toFixed(2):0),type:'line',borderColor:CG,backgroundColor:'transparent',yAxisID:'y1',tension:.4,pointRadius:4,pointBackgroundColor:CG}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:true,position:'top',labels:{color:'#8a9ab0',font:{size:9}}},tooltip:CTT},
+      scales:{x:{grid:{color:CGrid},ticks:{color:'#4a5a70'}},y:{grid:{color:CGrid},ticks:{color:'#4a5a70'}},y1:{position:'right',grid:{display:false},ticks:{color:CC}}}}});
+}
