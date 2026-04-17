@@ -491,3 +491,199 @@ function sendJSON(res, data, status) {
 function sendError(res, msg, status) {
   sendJSON(res, { error: msg }, status || 500);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// API HANDLERS — all chart/KPI reads from stats_cache (sub-second)
+// ═══════════════════════════════════════════════════════════════════
+
+function apiHealth(req, res) {
+  const row = db.prepare("SELECT value FROM meta WHERE key='loaded'").get();
+  sendJSON(res, { status: 'ok', trips: row ? parseInt(row.value, 10) : 0 });
+}
+
+function apiStats(req, res) {
+  const row = fromCache('stats_summary');
+  if (!row) { sendError(res, 'Cache not ready', 503); return; }
+  sendJSON(res, {
+    trips     : row.trips,
+    avg_dist  : +row.avg_dist.toFixed(2),
+    avg_fare  : +row.avg_fare.toFixed(2),
+    avg_speed : +row.avg_speed.toFixed(1),
+    dt_min    : row.dt_min,
+    dt_max    : row.dt_max
+  });
+}
+
+function apiOverview(req, res) {
+  sendJSON(res, {
+    kpis        : fromCache('kpis'),
+    hourly      : fromCache('hourly_volume'),
+    daily       : fromCache('daily_volume'),
+    vendor      : fromCache('vendor_volume'),
+    passenger   : fromCache('passenger'),
+    monthly     : fromCache('monthly'),
+    distBuckets : fromCache('dist_buckets'),
+    speedDist   : fromCache('speed_dist')
+  });
+}
+
+function apiTime(req, res) {
+  sendJSON(res, {
+    fareByHour  : fromCache('fare_by_hour'),
+    speedByHour : fromCache('speed_by_hour'),
+    dayMulti    : fromCache('day_multi')
+  });
+}
+
+function apiTrips(req, res) {
+  const q      = url.parse(req.url, true).query;
+  const page   = Math.max(1, parseInt(q.page, 10) || 1);
+  const LIMIT  = 20;
+  const OFFSET = (page - 1) * LIMIT;
+
+  const whereParts = [];
+  const params     = [];
+
+  if (q.hour !== undefined && q.hour !== '') {
+    whereParts.push('td.hour = ?');
+    params.push(parseInt(q.hour, 10));
+  }
+  if (q.day !== undefined && q.day !== '') {
+    const di = DAY_NAMES.indexOf(q.day);
+    if (di >= 0) { whereParts.push('td.day_of_week = ?'); params.push(di); }
+  }
+  if (q.vendor !== undefined && q.vendor !== '') {
+    whereParts.push('t.vendor_id = ?');
+    params.push(parseInt(q.vendor, 10));
+  }
+
+  const joinSQL  = 'JOIN time_dims td ON t.time_id = td.time_id';
+  const whereSQL = whereParts.length ? 'WHERE ' + whereParts.join(' AND ') : '';
+
+  const ALLOWED_SORT = new Set([
+    'pickup_datetime','trip_distance_km','trip_duration',
+    'speed_kmh','fare_estimate','vendor_id','passenger_count'
+  ]);
+  const sort  = ALLOWED_SORT.has(q.sort) ? `t.${q.sort}` : 't.pickup_datetime';
+  const order = q.order === 'ASC' ? 'ASC' : 'DESC';
+
+  const total = db.prepare(
+    `SELECT COUNT(*) AS cnt FROM trips t ${joinSQL} ${whereSQL}`
+  ).get(...params).cnt;
+
+  const trips = db.prepare(`
+    SELECT t.id, t.vendor_id, t.pickup_datetime, t.passenger_count,
+           t.trip_duration, t.trip_distance_km, t.speed_kmh, t.fare_estimate,
+           td.hour, td.day_of_week
+    FROM trips t ${joinSQL}
+    ${whereSQL}
+    ORDER BY ${sort} ${order}
+    LIMIT ? OFFSET ?
+  `).all(...params, LIMIT, OFFSET);
+
+  sendJSON(res, { trips, total, page, pages: Math.ceil(total / LIMIT) });
+}
+
+function apiMap(req, res) {
+  const q = url.parse(req.url, true).query;
+
+  // Efficient sample using rowid modulo (no ORDER BY RANDOM() scan)
+  const total     = db.prepare('SELECT COUNT(*) AS cnt FROM trips').get().cnt;
+  const skipEvery = Math.max(1, Math.floor(total / 600));
+
+  let points;
+  if (q.hour !== undefined && q.hour !== '') {
+    const h = parseInt(q.hour, 10);
+    points = db.prepare(`
+      SELECT t.pickup_latitude AS lat, t.pickup_longitude AS lon, t.speed_kmh
+      FROM trips t JOIN time_dims td ON t.time_id = td.time_id
+      WHERE td.hour = ? AND (t.rowid % ?) = 0
+      LIMIT 500
+    `).all(h, skipEvery);
+  } else {
+    points = db.prepare(`
+      SELECT pickup_latitude AS lat, pickup_longitude AS lon, speed_kmh
+      FROM trips WHERE (rowid % ?) = 0 LIMIT 500
+    `).all(skipEvery);
+  }
+
+  const dfSkip   = Math.max(1, Math.floor(total / 400));
+  const distFare = db.prepare(`
+    SELECT trip_distance_km AS dist, fare_estimate AS fare
+    FROM trips WHERE (rowid % ?) = 0 LIMIT 300
+  `).all(dfSkip);
+
+  sendJSON(res, {
+    points,
+    hourDensity : fromCache('hour_density'),
+    distFare,
+    sampleSize  : points.length
+  });
+}
+
+function apiAnomalies(req, res) {
+  // All population stats come from the pre-built cache — O(1) read
+  const S = fromCache('zscore_stats');
+  if (!S) { sendError(res, 'Cache not ready', 503); return; }
+
+  const n = S.n;
+  const statDur  = computeZScoreStats(S.s_dur,  S.s_dur2,  n);
+  const statDist = computeZScoreStats(S.s_dist, S.s_dist2, n);
+  const statSpd  = computeZScoreStats(S.s_spd,  S.s_spd2,  n);
+  const statFare = computeZScoreStats(S.s_fare, S.s_fare2, n);
+
+  const THRESHOLD = 2.5;
+  const durMin  = statDur.mean  - THRESHOLD * statDur.std;
+  const durMax  = statDur.mean  + THRESHOLD * statDur.std;
+  const distMin = statDist.mean - THRESHOLD * statDist.std;
+  const distMax = statDist.mean + THRESHOLD * statDist.std;
+  const spdMin  = statSpd.mean  - THRESHOLD * statSpd.std;
+  const spdMax  = statSpd.mean  + THRESHOLD * statSpd.std;
+  const fareMin = statFare.mean - THRESHOLD * statFare.std;
+  const fareMax = statFare.mean + THRESHOLD * statFare.std;
+
+  const anomalyTrips = db.prepare(`
+    SELECT id, pickup_datetime, trip_duration, trip_distance_km, speed_kmh, fare_estimate
+    FROM trips
+    WHERE trip_duration      NOT BETWEEN ? AND ?
+       OR trip_distance_km   NOT BETWEEN ? AND ?
+       OR speed_kmh          NOT BETWEEN ? AND ?
+       OR fare_estimate      NOT BETWEEN ? AND ?
+    ORDER BY speed_kmh DESC
+    LIMIT 200
+  `).all(durMin, durMax, distMin, distMax, spdMin, spdMax, fareMin, fareMax);
+
+  const flagged = anomalyTrips.map(t => {
+    const flags = [];
+    const zDur  = (t.trip_duration    - statDur.mean)  / statDur.std;
+    const zDist = (t.trip_distance_km - statDist.mean) / statDist.std;
+    const zSpd  = (t.speed_kmh        - statSpd.mean)  / statSpd.std;
+    const zFare = (t.fare_estimate    - statFare.mean) / statFare.std;
+    if (Math.abs(zDur)  > THRESHOLD) flags.push({ m: 'duration', z: zDur.toFixed(1)  });
+    if (Math.abs(zDist) > THRESHOLD) flags.push({ m: 'distance', z: zDist.toFixed(1) });
+    if (Math.abs(zSpd)  > THRESHOLD) flags.push({ m: 'speed',    z: zSpd.toFixed(1)  });
+    if (Math.abs(zFare) > THRESHOLD) flags.push({ m: 'fare',     z: zFare.toFixed(1) });
+    return { ...t, flags };
+  });
+
+  const anomalyCount = db.prepare(`
+    SELECT COUNT(*) AS cnt FROM trips
+    WHERE trip_duration    NOT BETWEEN ? AND ?
+       OR trip_distance_km NOT BETWEEN ? AND ?
+       OR speed_kmh        NOT BETWEEN ? AND ?
+       OR fare_estimate    NOT BETWEEN ? AND ?
+  `).get(durMin, durMax, distMin, distMax, spdMin, spdMax, fareMin, fareMax).cnt;
+
+  sendJSON(res, {
+    stats: {
+      total     : n,
+      anomalies : anomalyCount,
+      pct       : ((anomalyCount / n) * 100).toFixed(1),
+      avg_dur   : statDur.mean,   std_dur  : statDur.std,
+      avg_dist  : statDist.mean,  std_dist : statDist.std,
+      avg_spd   : statSpd.mean,   std_spd  : statSpd.std,
+      avg_fare  : statFare.mean,  std_fare : statFare.std
+    },
+    trips: flagged
+  });
+}
