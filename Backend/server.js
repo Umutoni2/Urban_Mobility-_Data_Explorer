@@ -319,3 +319,175 @@ async function processCSV() {
   buildStatsCache();
   console.log('[DB] Stats cache ready.');
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// STATS CACHE — pre-aggregate everything charts need
+// ═══════════════════════════════════════════════════════════════════
+
+function buildStatsCache() {
+  const setCache = db.prepare("INSERT OR REPLACE INTO stats_cache VALUES (?,?)");
+
+  const storeJSON = (key, query) => {
+    const result = db.prepare(query).all ? db.prepare(query).all() : db.prepare(query).get();
+    setCache.run(key, JSON.stringify(result));
+  };
+  const storeOne  = (key, query) => {
+    const result = db.prepare(query).get();
+    setCache.run(key, JSON.stringify(result));
+  };
+
+  // KPIs
+  storeOne('kpis', `
+    SELECT
+      COUNT(*)                AS total_trips,
+      AVG(trip_duration)      AS avg_duration,
+      AVG(trip_distance_km)   AS avg_distance,
+      AVG(speed_kmh)          AS avg_speed,
+      AVG(fare_estimate)      AS avg_fare,
+      SUM(trip_distance_km)   AS total_distance
+    FROM trips
+  `);
+
+  // Hourly volume + fare + speed — joined through time_dims
+  storeJSON('hourly_volume', `
+    SELECT td.hour, COUNT(*) AS cnt
+    FROM trips t JOIN time_dims td ON t.time_id = td.time_id
+    GROUP BY td.hour ORDER BY td.hour
+  `);
+  storeJSON('fare_by_hour', `
+    SELECT td.hour, AVG(t.fare_estimate) AS avg_fare, COUNT(*) AS cnt
+    FROM trips t JOIN time_dims td ON t.time_id = td.time_id
+    GROUP BY td.hour ORDER BY td.hour
+  `);
+  storeJSON('speed_by_hour', `
+    SELECT td.hour, AVG(t.speed_kmh) AS avg_speed
+    FROM trips t JOIN time_dims td ON t.time_id = td.time_id
+    GROUP BY td.hour ORDER BY td.hour
+  `);
+
+  // Daily
+  storeJSON('daily_volume', `
+    SELECT td.day_of_week, COUNT(*) AS cnt
+    FROM trips t JOIN time_dims td ON t.time_id = td.time_id
+    GROUP BY td.day_of_week ORDER BY td.day_of_week
+  `);
+  storeJSON('day_multi', `
+    SELECT
+      td.day_of_week,
+      COUNT(*)              AS cnt,
+      AVG(t.fare_estimate)  AS avg_fare,
+      AVG(t.trip_distance_km) AS avg_dist,
+      AVG(t.speed_kmh)      AS avg_speed
+    FROM trips t JOIN time_dims td ON t.time_id = td.time_id
+    GROUP BY td.day_of_week ORDER BY td.day_of_week
+  `);
+
+  // Vendor breakdown
+  storeJSON('vendor_volume', `
+    SELECT t.vendor_id, v.vendor_name, COUNT(*) AS cnt
+    FROM trips t JOIN vendors v ON t.vendor_id = v.vendor_id
+    GROUP BY t.vendor_id ORDER BY t.vendor_id
+  `);
+
+  // Passenger
+  storeJSON('passenger', `
+    SELECT passenger_count, COUNT(*) AS cnt
+    FROM trips GROUP BY passenger_count ORDER BY passenger_count
+  `);
+
+  // Monthly
+  storeJSON('monthly', `
+    SELECT td.month, COUNT(*) AS cnt
+    FROM trips t JOIN time_dims td ON t.time_id = td.time_id
+    GROUP BY td.month ORDER BY td.month
+  `);
+
+  // Distance buckets
+  storeJSON('dist_buckets', `
+    SELECT
+      CASE
+        WHEN trip_distance_km < 2  THEN '0-2 km'
+        WHEN trip_distance_km < 5  THEN '2-5 km'
+        WHEN trip_distance_km < 10 THEN '5-10 km'
+        WHEN trip_distance_km < 20 THEN '10-20 km'
+        ELSE '20+ km'
+      END AS bucket,
+      COUNT(*)           AS cnt,
+      AVG(fare_estimate) AS avg_fare
+    FROM trips GROUP BY bucket ORDER BY MIN(trip_distance_km)
+  `);
+
+  // Speed distribution
+  storeJSON('speed_dist', `
+    SELECT
+      CASE
+        WHEN speed_kmh < 10 THEN '<10'
+        WHEN speed_kmh < 20 THEN '10-20'
+        WHEN speed_kmh < 30 THEN '20-30'
+        WHEN speed_kmh < 40 THEN '30-40'
+        WHEN speed_kmh < 60 THEN '40-60'
+        ELSE '60+'
+      END AS bucket,
+      COUNT(*) AS cnt
+    FROM trips GROUP BY bucket ORDER BY MIN(speed_kmh)
+  `);
+
+  // Hour density (for map tab)
+  storeJSON('hour_density', `
+    SELECT td.hour, COUNT(*) AS cnt
+    FROM trips t JOIN time_dims td ON t.time_id = td.time_id
+    GROUP BY td.hour ORDER BY td.hour
+  `);
+
+  // Z-score stats (anomaly detection pre-compute)
+  storeOne('zscore_stats', `
+    SELECT
+      COUNT(*)                              AS n,
+      SUM(trip_duration)                    AS s_dur,
+      SUM(trip_duration * trip_duration)    AS s_dur2,
+      SUM(trip_distance_km)                 AS s_dist,
+      SUM(trip_distance_km*trip_distance_km) AS s_dist2,
+      SUM(speed_kmh)                        AS s_spd,
+      SUM(speed_kmh * speed_kmh)            AS s_spd2,
+      SUM(fare_estimate)                    AS s_fare,
+      SUM(fare_estimate * fare_estimate)    AS s_fare2
+    FROM trips
+  `);
+
+  // Summary stats for /api/stats endpoint
+  storeOne('stats_summary', `
+    SELECT
+      COUNT(*)               AS trips,
+      AVG(trip_distance_km)  AS avg_dist,
+      AVG(fare_estimate)     AS avg_fare,
+      AVG(speed_kmh)         AS avg_speed,
+      MIN(pickup_datetime)   AS dt_min,
+      MAX(pickup_datetime)   AS dt_max
+    FROM trips
+  `);
+}
+
+// Helper: read from cache (falls back to live query if cache is empty)
+function fromCache(key) {
+  const row = db.prepare("SELECT value FROM stats_cache WHERE key=?").get(key);
+  if (!row) return null;
+  return JSON.parse(row.value);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// HTTP HELPERS
+// ═══════════════════════════════════════════════════════════════════
+
+function sendJSON(res, data, status) {
+  const body = JSON.stringify(data);
+  res.writeHead(status || 200, {
+    'Content-Type'                : 'application/json',
+    'Access-Control-Allow-Origin' : '*',
+    'Cache-Control'               : 'public, max-age=300'
+  });
+  res.end(body);
+}
+
+function sendError(res, msg, status) {
+  sendJSON(res, { error: msg }, status || 500);
+}
