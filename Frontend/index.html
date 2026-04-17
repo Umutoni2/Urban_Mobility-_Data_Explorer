@@ -369,3 +369,46 @@ tbody td{padding:.55rem .9rem;font-family:var(--mono);font-size:.7rem;color:var(
       <div class="pagination" id="pagination"></div>
     </div>
 
+    <!-- GEO MAP -->
+    <div id="tab-map" class="tab-content">
+      <div class="filter-bar">
+        <label>Filter by hour</label>
+        <select id="map-hour"><option value="">All hours</option></select>
+        <button class="btn" onclick="loadMap()">Update Map</button>
+        <span id="map-count" style="font-family:var(--mono);font-size:.68rem;color:var(--text2);margin-left:auto"></span>
+      </div>
+      <div class="map-container">
+        <canvas id="scatter-canvas"></canvas>
+        <div class="map-overlay" id="map-label">NYC Pickup Locations</div>
+      </div>
+      <div class="chart-grid">
+        <div class="chart-card"><div class="chart-card-title">Pickup density by hour</div><div class="chart-wrap"><canvas id="chart-map-hour"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Distance vs Fare (scatter)</div><div class="chart-wrap"><canvas id="chart-dist-fare"></canvas></div></div>
+      </div>
+    </div>
+
+    <!-- ANOMALIES -->
+    <div id="tab-anomalies" class="tab-content">
+      <div class="sec-title">Anomaly Detection &mdash; Z-Score Method (manual implementation, no libraries)</div>
+      <div class="insight-grid" id="anomaly-stats"><div class="loading"><div class="spinner"></div> Analysing...</div></div>
+      <div class="sec-title">Flagged Trips (|Z| &gt; 2.5 on any metric)</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Trip ID</th><th>Date/Time</th><th>Duration</th>
+              <th>Distance</th><th>Speed</th><th>Fare Est.</th>
+              <th>Anomaly Flags</th>
+            </tr>
+          </thead>
+          <tbody id="anomaly-tbody">
+            <tr><td colspan="7"><div class="loading"><div class="spinner"></div> Loading anomalies...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<button id="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="Back to top">&#8593;</button>
+
