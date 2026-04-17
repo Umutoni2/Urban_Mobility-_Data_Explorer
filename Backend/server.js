@@ -735,3 +735,17 @@ const server = http.createServer((req, res) => {
   res.end('Not found');
 });
 
+// ═══════════════════════════════════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════════════════════════════════
+
+(async () => {
+  console.log('═══════════════════════════════════════');
+  console.log('  NYC Taxi Explorer — Backend Server   ');
+  console.log('═══════════════════════════════════════');
+  await processCSV();
+  server.listen(PORT, () => {
+    console.log(`[SERVER] Listening at http://localhost:${PORT}`);
+    console.log('[SERVER] Open your browser at that URL to start exploring.');
+  });
+})();
