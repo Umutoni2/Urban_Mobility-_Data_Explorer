@@ -687,3 +687,51 @@ function apiAnomalies(req, res) {
     trips: flagged
   });
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// HTTP SERVER + ROUTING
+// ═══════════════════════════════════════════════════════════════════
+
+const server = http.createServer((req, res) => {
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin'  : '*',
+      'Access-Control-Allow-Methods' : 'GET, OPTIONS',
+      'Access-Control-Allow-Headers' : 'Content-Type'
+    });
+    res.end();
+    return;
+  }
+
+  const parsed   = url.parse(req.url);
+  const pathname = parsed.pathname;
+
+  if (pathname === '/' || pathname === '../frontend/index.html') {
+    const fp = path.join(__dirname, '../frontend/index.html');
+    if (fs.existsSync(fp)) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(fs.readFileSync(fp));
+    } else {
+      res.writeHead(404); res.end('index.html not found');
+    }
+    return;
+  }
+
+  try {
+    if (pathname === '/api/health')    return apiHealth(req, res);
+    if (pathname === '/api/stats')     return apiStats(req, res);
+    if (pathname === '/api/overview')  return apiOverview(req, res);
+    if (pathname === '/api/time')      return apiTime(req, res);
+    if (pathname === '/api/trips')     return apiTrips(req, res);
+    if (pathname === '/api/map')       return apiMap(req, res);
+    if (pathname === '/api/anomalies') return apiAnomalies(req, res);
+  } catch (err) {
+    console.error('[API] Error:', err.message);
+    sendError(res, 'Internal server error: ' + err.message);
+    return;
+  }
+
+  res.writeHead(404, { 'Content-Type': 'text/plain' });
+  res.end('Not found');
+});
+
