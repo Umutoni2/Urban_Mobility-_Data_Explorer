@@ -261,3 +261,51 @@ tbody td{padding:.55rem .9rem;font-family:var(--mono);font-size:.7rem;color:var(
     <a href="#" class="btn-primary" onclick="openDashboard();return false;">Open Dashboard</a>
   </div>
 </div>
+
+<!-- DASHBOARD -->
+<div id="dashboard" class="dashboard">
+  <header class="dash-header">
+    <div class="dash-logo"><em>NYC</em> TAXI &mdash; Analytics Dashboard</div>
+    <div class="dash-header-right">
+      <span><span class="live-dot" style="display:inline-block"></span> <span id="dash-status">connecting...</span></span>
+      <span id="dash-range">—</span>
+      <span id="dash-trips">—</span>
+      <button class="dash-back" onclick="closeDashboard()">&#8592; Home</button>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active"  onclick="switchTab('overview')">Overview</div>
+    <div class="tab"         onclick="switchTab('time')">Time Patterns</div>
+    <div class="tab"         onclick="switchTab('trips')">Trip Explorer</div>
+    <div class="tab"         onclick="switchTab('map')">Geo Map</div>
+    <div class="tab"         onclick="switchTab('anomalies')">Anomalies</div>
+  </div>
+
+  <div class="dash-main">
+    <!-- OVERVIEW -->
+    <div id="tab-overview" class="tab-content active">
+      <div class="kpi-grid">
+        <div class="kpi-card"><div class="kpi-label">Total Trips</div><div class="kpi-value" id="kpi-trips">—</div></div>
+        <div class="kpi-card"><div class="kpi-label">Avg Duration</div><div class="kpi-value" id="kpi-dur">—</div><div class="kpi-sub">minutes</div></div>
+        <div class="kpi-card"><div class="kpi-label">Avg Distance</div><div class="kpi-value" id="kpi-dist">—</div><div class="kpi-sub">kilometres</div></div>
+        <div class="kpi-card"><div class="kpi-label">Avg Speed</div><div class="kpi-value" id="kpi-speed">—</div><div class="kpi-sub">km/h</div></div>
+        <div class="kpi-card"><div class="kpi-label">Avg Fare Est.</div><div class="kpi-value" id="kpi-fare">—</div><div class="kpi-sub">USD estimate</div></div>
+        <div class="kpi-card"><div class="kpi-label">Total Distance</div><div class="kpi-value" id="kpi-totaldist">—</div><div class="kpi-sub">km travelled</div></div>
+      </div>
+      <div class="sec-title">Key Insights</div>
+      <div class="insight-grid" id="insight-grid"><div class="loading"><div class="spinner"></div> Loading insights...</div></div>
+      <div class="chart-grid">
+        <div class="chart-card"><div class="chart-card-title">Trip volume by hour of day</div><div class="chart-wrap"><canvas id="chart-hour"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Trip volume by day of week</div><div class="chart-wrap"><canvas id="chart-day"></canvas></div></div>
+      </div>
+      <div class="chart-grid-3">
+        <div class="chart-card"><div class="chart-card-title">Vendor split</div><div class="chart-wrap"><canvas id="chart-vendor"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Passenger count distribution</div><div class="chart-wrap"><canvas id="chart-pax"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Monthly trip trend</div><div class="chart-wrap"><canvas id="chart-monthly"></canvas></div></div>
+      </div>
+      <div class="chart-grid">
+        <div class="chart-card"><div class="chart-card-title">Distance buckets — avg fare overlay</div><div class="chart-wrap"><canvas id="chart-distance"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Speed distribution</div><div class="chart-wrap"><canvas id="chart-speed"></canvas></div></div>
+      </div>
+    </div>
