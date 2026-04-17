@@ -309,3 +309,63 @@ tbody td{padding:.55rem .9rem;font-family:var(--mono);font-size:.7rem;color:var(
         <div class="chart-card"><div class="chart-card-title">Speed distribution</div><div class="chart-wrap"><canvas id="chart-speed"></canvas></div></div>
       </div>
     </div>
+
+    <!-- TIME PATTERNS -->
+    <div id="tab-time" class="tab-content">
+      <div class="sec-title">Hourly Performance Breakdown</div>
+      <div class="chart-grid">
+        <div class="chart-card"><div class="chart-card-title">Average fare by hour</div><div class="chart-wrap tall"><canvas id="chart-fare-hour"></canvas></div></div>
+        <div class="chart-card"><div class="chart-card-title">Average speed by hour</div><div class="chart-wrap tall"><canvas id="chart-speed-hour"></canvas></div></div>
+      </div>
+      <div class="chart-grid">
+        <div class="chart-card full"><div class="chart-card-title">Day-of-week — trips &middot; avg fare &middot; avg distance</div><div class="chart-wrap tall"><canvas id="chart-day-multi"></canvas></div></div>
+      </div>
+    </div>
+
+    <!-- TRIP EXPLORER -->
+    <div id="tab-trips" class="tab-content">
+      <div class="filter-bar">
+        <label>Hour</label>
+        <select id="f-hour"><option value="">All</option></select>
+        <label>Day</label>
+        <select id="f-day">
+          <option value="">All</option>
+          <option>Monday</option><option>Tuesday</option><option>Wednesday</option>
+          <option>Thursday</option><option>Friday</option><option>Saturday</option><option>Sunday</option>
+        </select>
+        <label>Vendor</label>
+        <select id="f-vendor"><option value="">All</option><option value="1">Vendor 1</option><option value="2">Vendor 2</option></select>
+        <label>Sort by</label>
+        <select id="f-sort">
+          <option value="pickup_datetime">Date</option>
+          <option value="trip_distance_km">Distance</option>
+          <option value="trip_duration">Duration</option>
+          <option value="speed_kmh">Speed</option>
+          <option value="fare_estimate">Fare</option>
+        </select>
+        <select id="f-order"><option value="DESC">Desc</option><option value="ASC">Asc</option></select>
+        <button class="btn" onclick="loadTrips(1)">Apply</button>
+        <button class="btn secondary" onclick="resetFilters()">Reset</button>
+        <span id="trip-count" style="font-family:var(--mono);font-size:.68rem;color:var(--text2);margin-left:auto"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th onclick="sortByCol('pickup_datetime')">Date/Time</th>
+              <th onclick="sortByCol('vendor_id')">Vendor</th>
+              <th onclick="sortByCol('passenger_count')">Pax</th>
+              <th onclick="sortByCol('trip_duration')">Duration</th>
+              <th onclick="sortByCol('trip_distance_km')">Distance</th>
+              <th onclick="sortByCol('speed_kmh')">Speed</th>
+              <th onclick="sortByCol('fare_estimate')">Est. Fare</th>
+            </tr>
+          </thead>
+          <tbody id="trip-tbody">
+            <tr><td colspan="7"><div class="loading"><div class="spinner"></div> Loading...</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination" id="pagination"></div>
+    </div>
+
