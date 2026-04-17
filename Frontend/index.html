@@ -803,3 +803,14 @@ async function loadAnomalies(){
     </tr>`).join('');
 }
 
+// ── BACK TO TOP ──
+window.addEventListener('scroll',()=>{
+  document.getElementById('back-to-top').classList.toggle('visible',window.scrollY>300);
+});
+
+// ── INIT ──
+initLanding();
+</script>
+</body>
+</html>
+
