@@ -158,3 +158,164 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_fare     ON trips(fare_estimate);
 `);
 
+// ── Build time_dims lookup (432 possible combinations: 24×7×6) ──────
+const getOrCreateTimeDim = (() => {
+  const cache  = new Map();
+  const select = db.prepare('SELECT time_id FROM time_dims WHERE hour=? AND day_of_week=? AND month=?');
+  const insert = db.prepare('INSERT OR IGNORE INTO time_dims(hour,day_of_week,month) VALUES(?,?,?)');
+  const lastId = db.prepare('SELECT last_insert_rowid() AS id');
+
+  return (hour, dow, month) => {
+    const k = `${hour}|${dow}|${month}`;
+    if (cache.has(k)) return cache.get(k);
+    let row = select.get(hour, dow, month);
+    if (!row) {
+      insert.run(hour, dow, month);
+      row = { time_id: lastId.get().id };
+    }
+    cache.set(k, row.time_id);
+    return row.time_id;
+  };
+})();
+
+// ═══════════════════════════════════════════════════════════════════
+// CSV PROCESSING PIPELINE
+// ═══════════════════════════════════════════════════════════════════
+
+async function processCSV() {
+  const loaded = db.prepare("SELECT value FROM meta WHERE key='loaded'").get();
+  if (loaded) {
+    console.log(`[DB] Already loaded — ${loaded.value} trips in database.`);
+    return;
+  }
+
+  if (!fs.existsSync(CSV_PATH)) {
+    console.error('[CSV] ERROR: train.csv not found. Place it in the project root directory.');
+    console.error('[CSV] Download from: https://www.kaggle.com/c/nyc-taxi-trip-duration/data');
+    return;
+  }
+
+  console.log('[CSV] Starting data pipeline...');
+  const startTime = Date.now();
+
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO trips
+      (id, vendor_id, pickup_datetime, dropoff_datetime, passenger_count,
+       pickup_longitude, pickup_latitude, dropoff_longitude, dropoff_latitude,
+       store_and_fwd_flag, trip_duration, trip_distance_km, speed_kmh,
+       fare_estimate, time_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+
+  // 200,000-row batches: each transaction covers 200k rows — dramatically
+  // reduces commit overhead vs 500-row batches (400× fewer transactions).
+  const BATCH_SIZE = 200000;
+  const insertBatch = db.transaction(rows => {
+    for (const r of rows) insert.run(r);
+  });
+
+  const rl = readline.createInterface({
+    input: fs.createReadStream(CSV_PATH, {
+      encoding  : 'utf8',
+      highWaterMark: 4 * 1024 * 1024   // 4 MB read buffer
+    }),
+    crlfDelay: Infinity
+  });
+
+  let lineNum  = 0;
+  let inserted = 0;
+  let skipped  = 0;
+  let batch    = [];
+
+  const excl = { missing: 0, duration: 0, coords: 0, distance: 0, speed: 0, pax: 0 };
+
+  const NYC_LAT_MIN = 40.45, NYC_LAT_MAX = 40.92;
+  const NYC_LON_MIN = -74.27, NYC_LON_MAX = -73.62;
+
+  for await (const line of rl) {
+    lineNum++;
+    if (lineNum === 1) continue; // skip header
+
+    const cols = line.split(',');
+    if (cols.length < 11) { excl.missing++; skipped++; continue; }
+
+    const [rawId, rawVendor, pickupDt, dropoffDt, rawPax,
+           rawPLon, rawPLat, rawDLon, rawDLat,
+           rawFlag, rawDur] = cols;
+
+    const dur  = parseInt(rawDur, 10);
+    const pLat = parseFloat(rawPLat);
+    const pLon = parseFloat(rawPLon);
+    const dLat = parseFloat(rawDLat);
+    const dLon = parseFloat(rawDLon);
+    const pax  = parseInt(rawPax, 10);
+    const vend = parseInt(rawVendor, 10);
+
+    if (!rawId || isNaN(dur) || isNaN(pLat) || isNaN(pLon) || isNaN(dLat) || isNaN(dLon)) {
+      excl.missing++; skipped++; continue;
+    }
+    if (dur < 60 || dur > 14400)       { excl.duration++; skipped++; continue; }
+    if (pax < 1  || pax > 6)           { excl.pax++;      skipped++; continue; }
+    if (pLat < NYC_LAT_MIN || pLat > NYC_LAT_MAX ||
+        pLon < NYC_LON_MIN || pLon > NYC_LON_MAX ||
+        dLat < NYC_LAT_MIN || dLat > NYC_LAT_MAX ||
+        dLon < NYC_LON_MIN || dLon > NYC_LON_MAX) {
+      excl.coords++; skipped++; continue;
+    }
+
+    const distKm  = haversine(pLat, pLon, dLat, dLon);
+    if (distKm < 0.1 || distKm > 200)  { excl.distance++; skipped++; continue; }
+
+    const speedKmh = distKm / (dur / 3600);
+    if (speedKmh < 1 || speedKmh > 150) { excl.speed++; skipped++; continue; }
+
+    const fare = estimateFare(distKm, dur);
+
+    const dt = new Date(pickupDt);
+    if (isNaN(dt.getTime())) { excl.missing++; skipped++; continue; }
+
+    const hour      = dt.getHours();
+    const dayOfWeek = dt.getDay();
+    const month     = dt.getMonth() + 1;
+    const timeId    = getOrCreateTimeDim(hour, dayOfWeek, month);
+
+    batch.push([
+      rawId.trim(), vend, pickupDt.trim(), dropoffDt ? dropoffDt.trim() : null, pax,
+      pLon, pLat, dLon, dLat,
+      rawFlag ? rawFlag.trim() : 'N',
+      dur,
+      Math.round(distKm   * 10000) / 10000,
+      Math.round(speedKmh * 10000) / 10000,
+      Math.round(fare     * 100)   / 100,
+      timeId
+    ]);
+
+    if (batch.length >= BATCH_SIZE) {
+      insertBatch(batch);
+      inserted += batch.length;
+      batch = [];
+      console.log(`[CSV]   Processed ${inserted.toLocaleString()} trips...`);
+    }
+  }
+
+  if (batch.length > 0) {
+    insertBatch(batch);
+    inserted += batch.length;
+  }
+
+  db.prepare("INSERT OR REPLACE INTO meta VALUES ('loaded', ?)").run(String(inserted));
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`[CSV] Pipeline complete in ${elapsed}s`);
+  console.log(`[CSV]   Inserted : ${inserted.toLocaleString()}`);
+  console.log(`[CSV]   Skipped  : ${skipped.toLocaleString()}`);
+  console.log(`[CSV]   Reasons  : duration=${excl.duration} coords=${excl.coords} dist=${excl.distance} speed=${excl.speed} pax=${excl.pax} missing=${excl.missing}`);
+
+  // Restore safe sync after bulk load
+  db.exec(`PRAGMA synchronous = NORMAL; PRAGMA locking_mode = NORMAL;`);
+
+  // Build stats cache so every chart query is O(1)
+  console.log('[DB] Building stats cache...');
+  buildStatsCache();
+  console.log('[DB] Stats cache ready.');
+}
