@@ -450,7 +450,7 @@ curl "http://localhost:3001/api/trips?hour=8&vendor=1&sort=fare_estimate&order=d
 </tr>
 </table>
 ---
----
+
 ## Project Management
 
 ### Team Tracking
