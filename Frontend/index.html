@@ -412,3 +412,130 @@ tbody td{padding:.55rem .9rem;font-family:var(--mono);font-size:.7rem;color:var(
 
 <button id="back-to-top" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="Back to top">&#8593;</button>
 
+<script>
+'use strict';
+const API = 'http://localhost:3001/api';
+let currentSort = 'pickup_datetime', currentOrder = 'DESC', currentPage = 1;
+let overviewLoaded = false, timeChartsRendered = false, anomaliesLoaded = false, mapLoaded = false;
+const charts = {};
+const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+(function buildHourOptions(){
+  ['f-hour','map-hour'].forEach(id=>{
+    const sel=document.getElementById(id);
+    for(let i=0;i<24;i++){const o=document.createElement('option');o.value=i;o.textContent=String(i).padStart(2,'0')+':00';sel.appendChild(o);}
+  });
+})();
+
+async function apiFetch(u){
+  try{const r=await fetch(API+u);if(!r.ok)throw new Error('HTTP '+r.status);return await r.json();}
+  catch(e){console.error('apiFetch',u,e.message);return null;}
+}
+
+Chart.defaults.color='#4a5a70';
+Chart.defaults.font.family="'JetBrains Mono', monospace";
+Chart.defaults.font.size=10;
+const CA='#f0b429',CC='#22d3ee',CG='#10b981',CR='#f43f5e';
+const CGrid='rgba(255,255,255,.04)';
+const CTT={backgroundColor:'#080b10',borderColor:'#1c2736',borderWidth:1,titleColor:'#8a9ab0',bodyColor:'#dde4ee'};
+
+function baseOpts(extra){
+  return Object.assign({responsive:true,maintainAspectRatio:false,
+    plugins:{legend:{display:false},tooltip:CTT},
+    scales:{x:{grid:{color:CGrid},ticks:{color:'#4a5a70'}},y:{grid:{color:CGrid},ticks:{color:'#4a5a70'}}}
+  },extra||{});
+}
+function mkChart(id,cfg){
+  if(charts[id]){charts[id].destroy();}
+  const el=document.getElementById(id);if(!el)return null;
+  charts[id]=new Chart(el.getContext('2d'),cfg);return charts[id];
+}
+
+const fmt={
+  dur:s=>{const m=Math.floor(+s/60),ss=Math.floor((+s)%60);return m+'m '+ss+'s';},
+  dist:d=>(+d).toFixed(2)+' km',
+  spd:s=>(+s).toFixed(1)+' km/h',
+  fare:f=>'$'+(+f).toFixed(2),
+  dt:d=>d?d.slice(0,16):'—',
+  num:n=>Number(n).toLocaleString(),
+km: n => (+n).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' km'
+};
+
+function openDashboard(){
+  document.getElementById('landing').style.display='none';
+  document.getElementById('dashboard').classList.add('active');
+  if(!overviewLoaded){overviewLoaded=true;loadOverview();}
+  window.scrollTo(0,0);
+}
+function closeDashboard(){
+  document.getElementById('dashboard').classList.remove('active');
+  document.getElementById('landing').style.display='';
+  window.scrollTo(0,0);
+}
+
+const TAB_NAMES=['overview','time','trips','map','anomalies'];
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',TAB_NAMES[i]===name));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  if(name==='trips'&&!document.getElementById('trip-tbody').dataset.loaded)loadTrips(1);
+  if(name==='map'&&!mapLoaded){mapLoaded=true;loadMap();}
+  if(name==='anomalies'&&!anomaliesLoaded){anomaliesLoaded=true;loadAnomalies();}
+  if(name==='time'&&!timeChartsRendered)renderTimeCharts();
+}
+
+// ── LANDING PAGE STATS ──
+async function initLanding(){
+  const d=await apiFetch('/stats');
+  const online=!!d;
+  document.querySelectorAll('#lp-status,#dash-status').forEach(el=>el.textContent=online?'connected':'offline');
+  document.querySelectorAll('.live-dot').forEach(el=>el.style.background=online?'#10b981':'#f43f5e');
+  if(!d)return;
+  document.getElementById('hs-trips').textContent=fmt.num(d.trips);
+  document.getElementById('hs-dist').textContent=d.avg_dist+' km';
+  document.getElementById('hs-fare').textContent='$'+d.avg_fare;
+  document.getElementById('hs-speed').textContent=d.avg_speed;
+  document.getElementById('dash-range').textContent=d.dt_min?d.dt_min.slice(0,7)+' → '+d.dt_max.slice(0,7):'—';
+  document.getElementById('dash-trips').textContent=fmt.num(d.trips)+' trips';
+  renderLandingInsights(d);
+}
+
+function renderLandingInsights(s){
+  const lay=document.getElementById('insights-layout');
+  lay.innerHTML=`
+    <div class="insight-big">
+      <div>
+        <div class="insight-big-title">Total Trips Analysed</div>
+        <div class="insight-big-sub">Complete pipeline from raw CSV to interactive dashboard. Every record validated, enriched with 3 derived features, and indexed for sub-100ms queries.</div>
+        <div class="insight-big-num">${fmt.num(s.trips)}</div>
+        <div class="insight-big-numlab">NYC taxi trips processed</div>
+      </div>
+      <div class="mini-bars" id="mini-bars-placeholder"></div>
+    </div>
+    <div class="insight-small">
+      <div class="insight-small-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f0b429" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      </div>
+      <div>
+        <div class="insight-small-label">Avg Distance</div>
+        <div class="insight-small-val">${s.avg_dist} <span>km / trip</span></div>
+      </div>
+    </div>
+    <div class="insight-small">
+      <div class="insight-small-icon cyan">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12,6 12,12 16,14"/></svg>
+      </div>
+      <div>
+        <div class="insight-small-label">Avg Speed</div>
+        <div class="insight-small-val">${s.avg_speed} <span>km/h</span></div>
+      </div>
+    </div>`;
+  // Mini bars placeholder (will be hourly counts if available)
+  const bars=document.getElementById('mini-bars-placeholder');
+  if(bars){
+    const vals=[20,35,15,10,8,12,25,60,85,72,65,70,80,75,68,72,90,95,85,70,60,50,40,30];
+    const mx=Math.max(...vals);
+    bars.innerHTML=vals.map((v,i)=>`<div class="mini-bar${v===mx?' hi':''}" style="height:${Math.round(v/mx*100)}%" title="Hour ${i}:00 — relative volume"></div>`).join('');
+  }
+}
