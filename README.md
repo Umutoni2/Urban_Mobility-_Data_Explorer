@@ -15,9 +15,6 @@
 
 ---
 
-## Video Walkthrough
-**[VIDEO LINK HERE]**
-
 ---
 
 ## Development Sprints
