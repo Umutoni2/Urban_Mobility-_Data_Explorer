@@ -761,3 +761,45 @@ function renderMapCharts(d){
       scales:{x:{grid:{color:CGrid},ticks:{color:'#4a5a70',callback:v=>v+'km'},title:{display:true,text:'Distance (km)',color:'#4a5a70'}},
               y:{grid:{color:CGrid},ticks:{color:'#4a5a70',callback:v=>'$'+v},title:{display:true,text:'Fare ($)',color:'#4a5a70'}}}}});
 }
+
+// ── ANOMALIES ──
+async function loadAnomalies(){
+  const d=await apiFetch('/anomalies');
+  if(!d)return;
+  const s=d.stats;
+  document.getElementById('anomaly-stats').innerHTML=`
+    <div class="insight-card yellow">
+      <div class="insight-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f0b429" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+      <div class="insight-headline">${fmt.num(s.anomalies)} Anomalies Found</div>
+      <div class="insight-body">${s.pct}% of ${fmt.num(s.total)} trips flagged with |Z| &gt; 2.5 on at least one metric.</div>
+    </div>
+    <div class="insight-card">
+      <div class="insight-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+      <div class="insight-headline">Duration Stats</div>
+      <div class="insight-body">Mean: ${(s.avg_dur/60).toFixed(1)} min &nbsp;&bull;&nbsp; Std Dev: ${(s.std_dur/60).toFixed(1)} min<br>Threshold: &plusmn;2.5&sigma;</div>
+    </div>
+    <div class="insight-card green">
+      <div class="insight-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/></svg></div>
+      <div class="insight-headline">Distance Stats</div>
+      <div class="insight-body">Mean: ${(+s.avg_dist).toFixed(2)} km &nbsp;&bull;&nbsp; Std Dev: ${(+s.std_dist).toFixed(2)} km</div>
+    </div>
+    <div class="insight-card red">
+      <div class="insight-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2"><polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/></svg></div>
+      <div class="insight-headline">Speed Stats</div>
+      <div class="insight-body">Mean: ${(+s.avg_spd).toFixed(1)} km/h &nbsp;&bull;&nbsp; Std Dev: ${(+s.std_spd).toFixed(1)} km/h</div>
+    </div>`;
+
+  const tbody=document.getElementById('anomaly-tbody');
+  if(!d.trips.length){tbody.innerHTML='<tr><td colspan="7" style="color:var(--text3);text-align:center;padding:1.5rem">No anomalies found.</td></tr>';return;}
+  tbody.innerHTML=d.trips.map(t=>`
+    <tr>
+      <td style="color:var(--text3);font-size:.63rem">${t.id}</td>
+      <td>${fmt.dt(t.pickup_datetime)}</td>
+      <td>${fmt.dur(t.trip_duration)}</td>
+      <td>${fmt.dist(t.trip_distance_km)}</td>
+      <td>${fmt.spd(t.speed_kmh)}</td>
+      <td>${fmt.fare(t.fare_estimate)}</td>
+      <td>${t.flags.map(f=>`<span class="anomaly-tag">${f.m} z=${f.z}</span>`).join(' ')}</td>
+    </tr>`).join('');
+}
+
