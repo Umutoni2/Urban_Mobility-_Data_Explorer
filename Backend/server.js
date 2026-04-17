@@ -77,3 +77,84 @@ function estimateFare(distKm, durationSec) {
 // Day name lookup (no library)
 const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
+// ═══════════════════════════════════════════════════════════════════
+// DATABASE SETUP — normalized schema
+// ═══════════════════════════════════════════════════════════════════
+
+const db = new Database(DB_PATH);
+
+// Maximum SQLite performance for bulk loading
+db.exec(`
+  PRAGMA journal_mode   = WAL;
+  PRAGMA synchronous    = OFF;
+  PRAGMA cache_size     = -131072;
+  PRAGMA temp_store     = MEMORY;
+  PRAGMA mmap_size      = 536870912;
+  PRAGMA page_size      = 65536;
+  PRAGMA locking_mode   = EXCLUSIVE;
+`);
+
+db.exec(`
+  -- ── Dimension: vendors ──────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS vendors (
+    vendor_id   INTEGER PRIMARY KEY,
+    vendor_name TEXT NOT NULL
+  );
+
+  INSERT OR IGNORE INTO vendors VALUES (1, 'Vendor 1');
+  INSERT OR IGNORE INTO vendors VALUES (2, 'Vendor 2');
+
+  -- ── Dimension: time_dims ────────────────────────────────────────
+  -- One row per unique (hour, day_of_week, month) combination.
+  -- Pre-computed so trips table only stores a FK integer.
+  CREATE TABLE IF NOT EXISTS time_dims (
+    time_id     INTEGER PRIMARY KEY,
+    hour        INTEGER NOT NULL,
+    day_of_week INTEGER NOT NULL,
+    month       INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_time_dims_hk ON time_dims(hour, day_of_week, month);
+
+  -- ── Fact: trips ──────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS trips (
+    id                TEXT    PRIMARY KEY,
+    vendor_id         INTEGER REFERENCES vendors(vendor_id),
+    pickup_datetime   TEXT    NOT NULL,
+    dropoff_datetime  TEXT,
+    passenger_count   INTEGER NOT NULL,
+    pickup_longitude  REAL    NOT NULL,
+    pickup_latitude   REAL    NOT NULL,
+    dropoff_longitude REAL    NOT NULL,
+    dropoff_latitude  REAL    NOT NULL,
+    store_and_fwd_flag TEXT,
+    trip_duration     INTEGER NOT NULL,
+    trip_distance_km  REAL    NOT NULL,
+    speed_kmh         REAL    NOT NULL,
+    fare_estimate     REAL    NOT NULL,
+    time_id           INTEGER REFERENCES time_dims(time_id)
+  );
+
+  -- ── Pre-aggregated stats cache ───────────────────────────────────
+  -- Populated once after ETL. All chart/KPI queries read from here
+  -- instead of scanning the full trips table — guarantees <1s responses.
+  CREATE TABLE IF NOT EXISTS stats_cache (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL        -- JSON blob
+  );
+
+  -- ── Meta ─────────────────────────────────────────────────────────
+  CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+  );
+
+  -- ── Indexes on trips ─────────────────────────────────────────────
+  CREATE INDEX IF NOT EXISTS idx_vendor   ON trips(vendor_id);
+  CREATE INDEX IF NOT EXISTS idx_time     ON trips(time_id);
+  CREATE INDEX IF NOT EXISTS idx_speed    ON trips(speed_kmh);
+  CREATE INDEX IF NOT EXISTS idx_dist     ON trips(trip_distance_km);
+  CREATE INDEX IF NOT EXISTS idx_pickup   ON trips(pickup_datetime);
+  CREATE INDEX IF NOT EXISTS idx_dur      ON trips(trip_duration);
+  CREATE INDEX IF NOT EXISTS idx_fare     ON trips(fare_estimate);
+`);
+
