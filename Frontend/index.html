@@ -640,3 +640,124 @@ async function renderTimeCharts(){
       plugins:{legend:{display:true,position:'top',labels:{color:'#8a9ab0',font:{size:9}}},tooltip:CTT},
       scales:{x:{grid:{color:CGrid},ticks:{color:'#4a5a70'}},y:{grid:{color:CGrid},ticks:{color:'#4a5a70'}},y1:{position:'right',grid:{display:false},ticks:{color:CC}}}}});
 }
+
+// ── TRIPS TABLE ──
+async function loadTrips(page){
+  currentPage=page||currentPage;
+  const hour=document.getElementById('f-hour').value;
+  const day=document.getElementById('f-day').value;
+  const vendor=document.getElementById('f-vendor').value;
+  const sort=document.getElementById('f-sort').value;
+  const order=document.getElementById('f-order').value;
+  let qs=`?page=${currentPage}&sort=${sort}&order=${order}`;
+  if(hour!=='')qs+=`&hour=${hour}`;
+  if(day!=='')qs+=`&day=${encodeURIComponent(day)}`;
+  if(vendor!=='')qs+=`&vendor=${vendor}`;
+  const tbody=document.getElementById('trip-tbody');
+  tbody.innerHTML='<tr><td colspan="7"><div class="loading"><div class="spinner"></div> Loading...</div></td></tr>';
+  const d=await apiFetch('/trips'+qs);
+  if(!d){tbody.innerHTML='<tr><td colspan="7" style="color:var(--red);text-align:center;padding:1rem">Failed to load</td></tr>';return;}
+  tbody.dataset.loaded='1';
+  document.getElementById('trip-count').textContent=fmt.num(d.total)+' trips found';
+  if(!d.trips.length){tbody.innerHTML='<tr><td colspan="7" style="color:var(--text3);text-align:center;padding:1.5rem">No trips match current filters.</td></tr>';renderPagination(0,0);return;}
+  tbody.innerHTML=d.trips.map(t=>`
+    <tr>
+      <td>${fmt.dt(t.pickup_datetime)}</td>
+      <td><span class="badge badge-v${t.vendor_id}">V${t.vendor_id}</span></td>
+      <td>${t.passenger_count}</td>
+      <td>${fmt.dur(t.trip_duration)}</td>
+      <td>${fmt.dist(t.trip_distance_km)}</td>
+      <td>${fmt.spd(t.speed_kmh)}</td>
+      <td>${fmt.fare(t.fare_estimate)}</td>
+    </tr>`).join('');
+  renderPagination(d.page,d.pages);
+}
+
+function renderPagination(page,pages){
+  const el=document.getElementById('pagination');
+  if(pages<=1){el.innerHTML='';return;}
+  const start=Math.max(1,page-2),end=Math.min(pages,page+2);
+  let html=`<button class="page-btn" onclick="loadTrips(1)" ${page===1?'disabled':''}>&#171;</button>
+    <button class="page-btn" onclick="loadTrips(${page-1})" ${page===1?'disabled':''}>&#8249;</button>`;
+  if(start>1)html+=`<span class="page-info">...</span>`;
+  for(let i=start;i<=end;i++)html+=`<button class="page-btn${i===page?' active':''}" onclick="loadTrips(${i})">${i}</button>`;
+  if(end<pages)html+=`<span class="page-info">...</span>`;
+  html+=`<button class="page-btn" onclick="loadTrips(${page+1})" ${page===pages?'disabled':''}>&#8250;</button>
+    <button class="page-btn" onclick="loadTrips(${pages})" ${page===pages?'disabled':''}>&#187;</button>`;
+  el.innerHTML=html;
+}
+
+function sortByCol(col){
+  const sortEl=document.getElementById('f-sort');
+  const orderEl=document.getElementById('f-order');
+  if(sortEl.value===col){orderEl.value=orderEl.value==='DESC'?'ASC':'DESC';}
+  else{sortEl.value=col;orderEl.value='DESC';}
+  loadTrips(1);
+}
+
+function resetFilters(){
+  document.getElementById('f-hour').value='';
+  document.getElementById('f-day').value='';
+  document.getElementById('f-vendor').value='';
+  document.getElementById('f-sort').value='pickup_datetime';
+  document.getElementById('f-order').value='DESC';
+  delete document.getElementById('trip-tbody').dataset.loaded;
+  loadTrips(1);
+}
+
+// ── GEO MAP ──
+async function loadMap(){
+  const hour=document.getElementById('map-hour').value;
+  let qs=hour!==''?`?hour=${hour}`:'';
+  const d=await apiFetch('/map'+qs);
+  if(!d)return;
+  document.getElementById('map-count').textContent=d.sampleSize+' points plotted';
+  document.getElementById('map-label').textContent='NYC Pickup Locations'+(hour!==''?' — '+String(hour).padStart(2,'0')+':00':'');
+  drawScatter(d.points);
+  renderMapCharts(d);
+}
+
+function drawScatter(pts){
+  const canvas=document.getElementById('scatter-canvas');
+  const rect=canvas.parentElement.getBoundingClientRect();
+  canvas.width=rect.width||800;canvas.height=rect.height||380;
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle='#080b10';ctx.fillRect(0,0,canvas.width,canvas.height);
+  if(!pts||!pts.length)return;
+  // NYC bounds: lat 40.45–40.92, lon -74.27 to -73.62
+  const LAT_MIN=40.45,LAT_MAX=40.92,LON_MIN=-74.27,LON_MAX=-73.62;
+  const W=canvas.width,H=canvas.height;
+  pts.forEach(p=>{
+    const x=(p.lon-LON_MIN)/(LON_MAX-LON_MIN)*W;
+    const y=(1-(p.lat-LAT_MIN)/(LAT_MAX-LAT_MIN))*H;
+    const spd=Math.min(+p.speed_kmh,80);
+    const t=spd/80;
+    const r=Math.round((1-t)*244+t*34);
+    const g=Math.round((1-t)*63+t*211);
+    const b=Math.round((1-t)*94+t*238);
+    ctx.globalAlpha=0.7;
+    ctx.fillStyle=`rgb(${r},${g},${b})`;
+    ctx.beginPath();ctx.arc(x,y,2.5,0,Math.PI*2);ctx.fill();
+  });
+  ctx.globalAlpha=1;
+  // Legend
+  const lgW=120,lgH=14,lgX=W-lgW-12,lgY=H-30;
+  const grad=ctx.createLinearGradient(lgX,0,lgX+lgW,0);
+  grad.addColorStop(0,'#f43f5e');grad.addColorStop(1,'#22d3ee');
+  ctx.fillStyle=grad;ctx.fillRect(lgX,lgY,lgW,lgH);
+  ctx.fillStyle='rgba(8,11,16,.7)';ctx.fillRect(lgX-2,lgY+lgH+1,lgW+4,14);
+  ctx.fillStyle='#8a9ab0';ctx.font='9px JetBrains Mono,monospace';
+  ctx.fillText('slow',lgX,lgY+lgH+11);ctx.fillText('fast',lgX+lgW-22,lgY+lgH+11);
+}
+
+function renderMapCharts(d){
+  const hours=Array.from({length:24},(_,i)=>String(i).padStart(2,'0'));
+  const hm={};d.hourDensity.forEach(r=>hm[r.hour]=r.cnt);
+  if(charts['chart-map-hour'])charts['chart-map-hour'].destroy();
+  mkChart('chart-map-hour',{type:'bar',data:{labels:hours,datasets:[{data:hours.map((_,i)=>hm[i]||0),backgroundColor:CA+'55',borderColor:CA,borderWidth:1,borderRadius:2}]},options:baseOpts()});
+  if(charts['chart-dist-fare'])charts['chart-dist-fare'].destroy();
+  mkChart('chart-dist-fare',{type:'scatter',data:{datasets:[{data:d.distFare.map(p=>({x:+p.dist,y:+p.fare})),backgroundColor:CC+'66',pointRadius:2}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{...CTT,callbacks:{label:c=>`${c.parsed.x.toFixed(1)}km → $${c.parsed.y.toFixed(2)}`}}},
+      scales:{x:{grid:{color:CGrid},ticks:{color:'#4a5a70',callback:v=>v+'km'},title:{display:true,text:'Distance (km)',color:'#4a5a70'}},
+              y:{grid:{color:CGrid},ticks:{color:'#4a5a70',callback:v=>'$'+v},title:{display:true,text:'Fare ($)',color:'#4a5a70'}}}}});
+}
